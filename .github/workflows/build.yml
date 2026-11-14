@@ -2,6 +2,7 @@ name: Aurora Tuned
 on:
   push:
     branches: [main]
+    paths-ignore: ['.github/workflows/migrate-image.yml']
   pull_request:
     branches: [main]
   schedule:
