@@ -9,26 +9,6 @@ output=/usr/lib/modules/$kernel/initramfs.img
 scratch=$(mktemp -d /tmp/dell-initramfs.XXXXXX)
 trap 'rm -rf "$scratch"' EXIT
 
-# Dracut renamed its PCR measurement module in version 110.
-pcr_module=
-for candidate in systemd-pcrextend systemd-pcrphase; do
-    for setup in /usr/lib/dracut/modules.d/[0-9][0-9]"$candidate"/module-setup.sh; do
-        if [[ -f $setup ]]; then pcr_module=$candidate; break 2; fi
-    done
-done
-[[ -n $pcr_module ]] || { echo 'Dracut PCR measurement module missing (systemd-pcrextend or systemd-pcrphase)' >&2; exit 1; }
-printf 'Using Dracut PCR measurement module: %s\n' "$pcr_module"
-
-# Modules from the working Dell initramfs. Preserve Aurora's authentication
-# and crypto support; no Alienware-specific exclusions are applied.
-modules=(nss-softokn bash systemd fips fips-crypto-policies
-    systemd-ask-password systemd-battery-check systemd-cryptsetup systemd-initrd
-    systemd-journald systemd-modules-load "$pcr_module" systemd-sysctl
-    systemd-tmpfiles systemd-udevd i18n drm plymouth ostree bootc systemd-sysusers
-    btrfs crypt dm fs-lib kernel-modules kernel-modules-extra prefixdevname fido2 pcsc pkcs11 tpm2-tss
-    rootfs-block terminfo udev-rules dracut-systemd initqueue usrmount base
-    memstrack shell-interpreter shutdown openssl)
-
 # Keep the complete driver inventory of the working local initramfs.
 # Resolve dependencies against the image kernel, never against the CI runner.
 mapfile -t seeds < /ctx/initramfs-drivers.txt
@@ -66,22 +46,21 @@ while IFS= read -r path; do
 done < <(find "/usr/lib/modules/$kernel" -type f \( -name '*.ko' -o -name '*.ko.xz' -o -name '*.ko.zst' \))
 
 # Same reproducibility convention as Aurora's official initramfs build.
+# Let Dracut select its modules from the installed Aurora configuration.
+# Only the kernel driver and firmware selection is customized here.
 cp /usr/lib/os-release "$scratch/os-release"
 sed -Ei '/^((OSTREE_)?(IMAGE_)?VERSION|PRETTY_NAME|BUILD_ID)=/d' /usr/lib/os-release
 DRACUT_NO_XATTR=1 dracut --force --reproducible --kver "$kernel" \
     --no-hostonly --no-hostonly-cmdline --no-hostonly-i18n \
-    --modules "${modules[*]}" --drivers "${drivers[*]}" \
+    --drivers "${drivers[*]}" \
     --omit-drivers "${omit[*]}" \
     --install "${firmware[*]} /usr/lib/kbd/keymaps/legacy/i386/qwerty/it.map.gz" --strip "$output"
 cp "$scratch/os-release" /usr/lib/os-release
 lsinitrd "$output" > "$scratch/list"
-lsinitrd -m "$output" > "$scratch/modules"
+lsinitrd -m "$output"
 mkdir "$scratch/unpack"
 (cd "$scratch/unpack" && lsinitrd --unpack "$output")
 
-for module in "${modules[@]}"; do
-    grep -Fxq "$module" "$scratch/modules"
-done
 for path in "${firmware[@]}"; do
     [[ -f $scratch/unpack/${path#/} ]] || { echo "Firmware absent from initramfs: $path" >&2; exit 1; }
 done
@@ -89,10 +68,15 @@ for driver in "${seeds[@]}"; do
     path=$(modinfo -k "$kernel" -n "$driver")
     [[ $path == '(builtin)' ]] || grep -Fq "/$(basename "$path")" "$scratch/list"
 done
-for pattern in 'systemd-cryptsetup' 'libcryptsetup-token-systemd-tpm2.so' \
-    'libtss2-esys.so' 'ostree-prepare-root' 'bootc/initramfs-setup' 'GenuineIntel.bin' 'it.map'; do
-    grep -Fq "$pattern" "$scratch/list"
+for pattern in '/systemd-cryptsetup$' '/libcryptsetup-token-systemd-tpm2\.so$' \
+    '/libtss2-esys\.so(\.[0-9.]+)?$' '/ostree-prepare-root$' '/bootc/initramfs-setup$' \
+    '/GenuineIntel\.bin$' '/it\.map(\.gz)?$'; do
+    grep -Eq "$pattern" "$scratch/list" || { echo "Missing boot component in initramfs: $pattern" >&2; exit 1; }
 done
+if ! grep -Eq 'ExecStart=.*systemd-pcrextend.*enter-initrd' "$scratch/unpack"/usr/lib/systemd/system/*.service; then
+    echo 'Missing systemd PCR measurement for entry into the initrd' >&2
+    exit 1
+fi
 
 # Reject host identifiers/configuration, rather than publishing a local initrd.
 for path in etc/crypttab etc/block_uuid.map etc/fstab; do
