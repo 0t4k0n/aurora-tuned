@@ -37,13 +37,11 @@ rm -f /usr/lib/modules-load.d/60-sunshine.conf
 
 # Keep Aurora's OS name and version; image identity lives in OCI metadata.
 /usr/bin/bash /ctx/build-initramfs.sh
-install -Dm0644 /ctx/cosign.pub /etc/pki/containers/aurora-dell5421.pub
 install -Dm0644 /ctx/cosign.pub /etc/pki/containers/aurora-tuned.pub
 policy_tmp=$(mktemp)
 jq '
     def trust($key): [{"type":"sigstoreSigned","keyPath":$key,"signedIdentity":{"type":"matchRepository"}}];
-    .transports.docker["ghcr.io/0t4k0n/aurora-dell5421"] = trust("/etc/pki/containers/aurora-dell5421.pub")
-    | .transports.docker["ghcr.io/0t4k0n/aurora-tuned"] = trust("/etc/pki/containers/aurora-tuned.pub")
+    .transports.docker["ghcr.io/0t4k0n/aurora-tuned"] = trust("/etc/pki/containers/aurora-tuned.pub")
 ' /etc/containers/policy.json > "$policy_tmp"
 install -m0644 "$policy_tmp" /etc/containers/policy.json
 rm -f "$policy_tmp"
