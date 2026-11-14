@@ -22,6 +22,10 @@ modules=(nss-softokn bash systemd fips fips-crypto-policies
 # Keep the complete driver inventory of the working local initramfs.
 # Resolve dependencies against the image kernel, never against the CI runner.
 mapfile -t seeds < /ctx/initramfs-drivers.txt
+# ZFS is not needed for the Btrfs boot path and some Aurora kernels omit it.
+if ! modinfo -k "$kernel" zfs >/dev/null 2>&1; then
+    mapfile -t seeds < <(grep -vxE 'spl|zfs' /ctx/initramfs-drivers.txt)
+fi
 seeds+=(
 i915 nvme dm_crypt btrfs ext4 vfat erofs overlay tpm_tis
 xhci_pci usb_storage uas sd_mod usbhid hid_generic atkbd i8042
